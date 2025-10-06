@@ -1,186 +1,193 @@
-import express from 'express';
-import { supabase } from '../supabase.js';
-import { parsePagination } from '../../utils/pagination.js';
-import { createMemberSchema, updateMemberSchema } from '../../validators/members.js';
-
+import express from "express";
+import { db } from "../db.js";
 const router = express.Router();
 
-/* GET /members */
-router.get('/', async (req, res) => {
+router.get("/", async (req, res) => {
   try {
-    const { from, to } = parsePagination(req.query, { perPage: 6 });
-    const { position, faculty, program, search } = req.query;
+    const { q = "", position = "", faculty = "", program = "", page = 1, perPage = 6 } = req.query;
+    const p = Number(page) || 1, n = Number(perPage) || 6, off = (p - 1) * n;
 
-    let q = supabase
-      .from('members')
-      .select(`
-        id, slug, name, title, position, faculty, program, email, avatar_url,
-        member_specialists ( spec:specialists ( name ) ),
-        skills ( skill_name )
-      `, { count: 'exact' })
-      .order('position', { ascending: false })
-      .order('name', { ascending: true })
-      .range(from, to);
+    const cond = [], vals = [];
+    if (q) { cond.push("(name LIKE ? OR email LIKE ?)"); vals.push(`%${q}%`, `%${q}%`); }
+    if (position) { cond.push("position = ?"); vals.push(position); }
+    if (faculty)  { cond.push("faculty = ?");  vals.push(faculty); }
+    if (program)  { cond.push("program = ?");  vals.push(program); }
 
-    if (position) q = q.eq('position', position);
-    if (faculty)  q = q.eq('faculty', faculty);
-    if (program)  q = q.eq('program', program);
-    if (search)   q = q.ilike('name', `%${search}%`);
+    const where = cond.length ? "WHERE " + cond.join(" AND ") : "";
+    const [rows]  = await db.query(`SELECT * FROM members ${where} ORDER BY id DESC LIMIT ? OFFSET ?`, [...vals, n, off]);
+    const [count] = await db.query(`SELECT COUNT(*) as c FROM members ${where}`, vals);
 
-    const { data, count, error } = await q;
-    if (error) throw error;
-    res.json({ data, count, page: Math.floor(from / (to - from + 1)) + 1, perPage: to - from + 1 });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+    res.json({ data: rows, count: count[0].c, page: p, perPage: n });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-/* GET /members/:slug */
-router.get('/:slug', async (req, res) => {
+router.get("/:slug", async (req, res) => {
   try {
     const { slug } = req.params;
-    const { data, error } = await supabase
-      .from('members')
-      .select(`
-        id, slug, name, title, position, faculty, program, email, avatar_url, bio, created_at,
-        member_specialists ( spec:specialists ( name ) ),
-        skills ( skill_name ),
-        certifications ( cert_name ),
-        experiences ( role, org, period, bullets ),
-        educations ( degree, org, year, note ),
-        socials ( type, url )
-      `)
-      .eq('slug', slug)
-      .single();
+    const [[m]] = await db.query("SELECT * FROM members WHERE slug = ?", [slug]);
+    if (!m) return res.status(404).json({ error: "Not found" });
 
-    if (error) throw error;
-    if (!data) return res.status(404).json({ error: 'Not found' });
-    res.json(data);
+    const [spec] = await db.query(`
+      SELECT s.name FROM member_specialists ms
+      JOIN specialists s ON s.id = ms.spec_id WHERE ms.member_id = ?`, [m.id]);
+
+    const [skills] = await db.query(`SELECT skill_name FROM skills WHERE member_id = ?`, [m.id]);
+    const [exps]   = await db.query(`SELECT id, role, org, period, bullets FROM experiences WHERE member_id = ?`, [m.id]);
+    const [edus]   = await db.query(`SELECT id, degree, org, year, note FROM educations WHERE member_id = ?`, [m.id]);
+    const [certs]  = await db.query(`SELECT id, cert_name FROM certifications WHERE member_id = ?`, [m.id]);
+    const [soc]    = await db.query(`SELECT id, type, url FROM socials WHERE member_id = ?`, [m.id]);
+
+    // parse bullets (JSON string) jika ada
+    exps.forEach(e => { if (typeof e.bullets === "string") { try { e.bullets = JSON.parse(e.bullets); } catch {} } });
+
+    res.json({
+      ...m,
+      member_specialists: spec.map(s => ({ spec: { name: s.name } })),
+      skills: skills.map(s => ({ skill_name: s.skill_name })),
+      experiences: exps,
+      educations: edus,
+      certifications: certs,
+      socials: soc
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// CREATE
+router.post('/', async (req, res) => {
+  try {
+    const {
+      slug, name, title, position, faculty, program, email, avatar_url, bio,
+      specialists = [], skills = [], experiences = [], educations = [], certifications = [], socials = []
+    } = req.body;
+
+    if (!slug || !name) return res.status(400).json({ error: 'slug & name required' });
+
+    // insert member
+    const [r] = await db.query(
+      `INSERT INTO members (slug, name, title, position, faculty, program, email, avatar_url, bio)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [slug, name, title, position, faculty, program, email, avatar_url, bio]
+    );
+    const memberId = r.insertId;
+
+    // specialists: upsert by name → relasi
+    for (const nm of specialists) {
+      if (!nm) continue;
+      await db.query(`INSERT IGNORE INTO specialists (name) VALUES (?)`, [nm]);
+      const [[sp]] = await db.query(`SELECT id FROM specialists WHERE name=?`, [nm]);
+      if (sp) await db.query(`INSERT IGNORE INTO member_specialists (member_id, spec_id) VALUES (?, ?)`, [memberId, sp.id]);
+    }
+
+    // skills
+    for (const s of skills) {
+      if (!s) continue;
+      await db.query(`INSERT IGNORE INTO skills (member_id, skill_name) VALUES (?, ?)`, [memberId, s]);
+    }
+
+    // experiences
+    for (const e of experiences) {
+      await db.query(
+        `INSERT INTO experiences (member_id, role, org, period, bullets) VALUES (?, ?, ?, ?, ?)`,
+        [memberId, e.role || null, e.org || null, e.period || null, e.bullets ? JSON.stringify(e.bullets) : null]
+      );
+    }
+
+    // educations
+    for (const ed of educations) {
+      await db.query(
+        `INSERT INTO educations (member_id, degree, org, year, note) VALUES (?, ?, ?, ?, ?)`,
+        [memberId, ed.degree || null, ed.org || null, ed.year || null, ed.note || null]
+      );
+    }
+
+    // certifications
+    for (const c of certifications) {
+      await db.query(`INSERT INTO certifications (member_id, cert_name) VALUES (?, ?)`, [memberId, c || null]);
+    }
+
+    // socials
+    for (const s of socials) {
+      await db.query(`INSERT INTO socials (member_id, type, url) VALUES (?, ?, ?)`, [memberId, s.type || null, s.url || null]);
+    }
+
+    res.status(201).json({ id: memberId, slug });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-/* POST /members */
-router.post('/', async (req, res) => {
-  try {
-    const payload = createMemberSchema.parse(req.body);
-
-    const { data: member, error: e1 } = await supabase
-      .from('members')
-      .insert([{
-        slug: payload.slug,
-        name: payload.name,
-        title: payload.title,
-        position: payload.position || 'Anggota',
-        faculty: payload.faculty,
-        program: payload.program,
-        email: payload.email,
-        avatar_url: payload.avatar_url,
-        bio: payload.bio,
-      }])
-      .select('id, slug')
-      .single();
-    if (e1) throw e1;
-
-    const memberId = member.id;
-
-    if (payload.specialists?.length) {
-      await supabase.from('specialists')
-        .upsert(payload.specialists.map(name => ({ name })), { onConflict: 'name' });
-
-      const { data: specRows } = await supabase
-        .from('specialists').select('id,name').in('name', payload.specialists);
-
-      const links = (specRows || []).map(s => ({ member_id: memberId, spec_id: s.id }));
-      if (links.length) await supabase.from('member_specialists').upsert(links, { onConflict: 'member_id, spec_id' });
-    }
-
-    if (payload.skills?.length) {
-      await supabase.from('skills').insert(payload.skills.map(skill_name => ({ member_id: memberId, skill_name })));
-    }
-    if (payload.certifications?.length) {
-      await supabase.from('certifications').insert(payload.certifications.map(cert_name => ({ member_id: memberId, cert_name })));
-    }
-    if (payload.experiences?.length) {
-      await supabase.from('experiences').insert(payload.experiences.map(e => ({ member_id: memberId, ...e })));
-    }
-    if (payload.educations?.length) {
-      await supabase.from('educations').insert(payload.educations.map(ed => ({ member_id: memberId, ...ed })));
-    }
-    if (payload.socials?.length) {
-      await supabase.from('socials').insert(payload.socials.map(s => ({ member_id: memberId, ...s })));
-    }
-
-    res.status(201).json({ message: 'Created', slug: member.slug });
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-/* PATCH /members/:slug */
+// UPDATE (by slug)
 router.patch('/:slug', async (req, res) => {
   try {
     const { slug } = req.params;
-    const payload = updateMemberSchema.parse(req.body);
-    const { data: m, error: e0 } = await supabase.from('members').select('id, slug').eq('slug', slug).single();
-    if (e0) throw e0;
+    const {
+      name, title, position, faculty, program, email, avatar_url, bio,
+      specialists, skills, experiences, educations, certifications, socials
+    } = req.body;
+
+    const [[m]] = await db.query(`SELECT id FROM members WHERE slug=?`, [slug]);
     if (!m) return res.status(404).json({ error: 'Not found' });
 
-    const basic = { ...payload };
-    delete basic.specialists; delete basic.skills; delete basic.certifications;
-    delete basic.experiences; delete basic.educations; delete basic.socials;
+    await db.query(
+      `UPDATE members SET name=?, title=?, position=?, faculty=?, program=?, email=?, avatar_url=?, bio=? WHERE id=?`,
+      [name, title, position, faculty, program, email, avatar_url, bio, m.id]
+    );
 
-    if (Object.keys(basic).length) {
-      const { error: e1 } = await supabase.from('members').update(basic).eq('id', m.id);
-      if (e1) throw e1;
-    }
-
-    if (payload.specialists) {
-      await supabase.from('member_specialists').delete().eq('member_id', m.id);
-      if (payload.specialists.length) {
-        await supabase.from('specialists').upsert(payload.specialists.map(name => ({ name })), { onConflict: 'name' });
-        const { data: specRows } = await supabase.from('specialists').select('id,name').in('name', payload.specialists);
-        const links = (specRows || []).map(s => ({ member_id: m.id, spec_id: s.id }));
-        if (links.length) await supabase.from('member_specialists').insert(links);
+    // Jika field relasi dikirim, refresh isinya (sederhana)
+    if (Array.isArray(specialists)) {
+      await db.query(`DELETE FROM member_specialists WHERE member_id=?`, [m.id]);
+      for (const nm of specialists) {
+        if (!nm) continue;
+        await db.query(`INSERT IGNORE INTO specialists (name) VALUES (?)`, [nm]);
+        const [[sp]] = await db.query(`SELECT id FROM specialists WHERE name=?`, [nm]);
+        if (sp) await db.query(`INSERT IGNORE INTO member_specialists (member_id, spec_id) VALUES (?, ?)`, [m.id, sp.id]);
       }
     }
-    if (payload.skills) {
-      await supabase.from('skills').delete().eq('member_id', m.id);
-      if (payload.skills.length) await supabase.from('skills').insert(payload.skills.map(skill_name => ({ member_id: m.id, skill_name })));
+    if (Array.isArray(skills)) {
+      await db.query(`DELETE FROM skills WHERE member_id=?`, [m.id]);
+      for (const s of skills) await db.query(`INSERT IGNORE INTO skills (member_id, skill_name) VALUES (?, ?)`, [m.id, s]);
     }
-    if (payload.certifications) {
-      await supabase.from('certifications').delete().eq('member_id', m.id);
-      if (payload.certifications.length) await supabase.from('certifications').insert(payload.certifications.map(cert_name => ({ member_id: m.id, cert_name })));
+    if (Array.isArray(experiences)) {
+      await db.query(`DELETE FROM experiences WHERE member_id=?`, [m.id]);
+      for (const e of experiences) {
+        await db.query(
+          `INSERT INTO experiences (member_id, role, org, period, bullets) VALUES (?, ?, ?, ?, ?)`,
+          [m.id, e.role || null, e.org || null, e.period || null, e.bullets ? JSON.stringify(e.bullets) : null]
+        );
+      }
     }
-    if (payload.experiences) {
-      await supabase.from('experiences').delete().eq('member_id', m.id);
-      if (payload.experiences.length) await supabase.from('experiences').insert(payload.experiences.map(e => ({ member_id: m.id, ...e })));
+    if (Array.isArray(educations)) {
+      await db.query(`DELETE FROM educations WHERE member_id=?`, [m.id]);
+      for (const ed of educations) {
+        await db.query(
+          `INSERT INTO educations (member_id, degree, org, year, note) VALUES (?, ?, ?, ?, ?)`,
+          [m.id, ed.degree || null, ed.org || null, ed.year || null, ed.note || null]
+        );
+      }
     }
-    if (payload.educations) {
-      await supabase.from('educations').delete().eq('member_id', m.id);
-      if (payload.educations.length) await supabase.from('educations').insert(payload.educations.map(ed => ({ member_id: m.id, ...ed })));
+    if (Array.isArray(certifications)) {
+      await db.query(`DELETE FROM certifications WHERE member_id=?`, [m.id]);
+      for (const c of certifications) await db.query(`INSERT INTO certifications (member_id, cert_name) VALUES (?, ?)`, [m.id, c || null]);
     }
-    if (payload.socials) {
-      await supabase.from('socials').delete().eq('member_id', m.id);
-      if (payload.socials.length) await supabase.from('socials').insert(payload.socials.map(s => ({ member_id: m.id, ...s })));
+    if (Array.isArray(socials)) {
+      await db.query(`DELETE FROM socials WHERE member_id=?`, [m.id]);
+      for (const s of socials) await db.query(`INSERT INTO socials (member_id, type, url) VALUES (?, ?, ?)`, [m.id, s.type || null, s.url || null]);
     }
 
-    res.json({ message: 'Updated', slug: m.slug });
+    res.json({ ok: true });
   } catch (e) {
-    res.status(400).json({ error: e.message });
+    res.status(500).json({ error: e.message });
   }
 });
 
-/* DELETE /members/:slug */
+// DELETE
 router.delete('/:slug', async (req, res) => {
   try {
     const { slug } = req.params;
-    const { data: m } = await supabase.from('members').select('id').eq('slug', slug).single();
+    const [[m]] = await db.query(`SELECT id FROM members WHERE slug=?`, [slug]);
     if (!m) return res.status(404).json({ error: 'Not found' });
-    const { error } = await supabase.from('members').delete().eq('id', m.id);
-    if (error) throw error;
-    res.json({ message: 'Deleted' });
+    await db.query(`DELETE FROM members WHERE id=?`, [m.id]); // FK CASCADE akan menghapus turunan
+    res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
