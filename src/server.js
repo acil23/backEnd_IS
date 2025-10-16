@@ -12,6 +12,8 @@ import newsAdminRouter from "./routes/newsAdmin.js";
 import journlasRouter from "./routes/journlas.js";
 import uploadsJournalsRouter from "./routes/uploadsJournals.js";
 import journalsAdminRouter from "./routes/journalsAdmin.js";
+import collaborationsRouter from "./routes/collaborations.js";
+import { collabUploadRoute } from "./routes/uploads.js";
 
 const app = express();
 const UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(process.cwd(), 'uploads');
@@ -32,8 +34,10 @@ app.use("/admin/news", newsAdminRouter);
 app.use("/journals", journlasRouter);
 app.use("/uploads", uploadsJournalsRouter);
 app.use("/admin/journals", journalsAdminRouter);
+app.use("/collaborations", collaborationsRouter);
 
 app.use("/uploads", express.static(UPLOADS_DIR));
+collabUploadRoute(app);
 
 
 app.get('/health', (_, res) => res.json({ ok: true }));
