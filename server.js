@@ -19,6 +19,7 @@ import collaborationsRouter from './src/routes/collaborations.js';
 import { collabUploadRoute } from './src/routes/uploads.js';
 import projectsRouter from './src/routes/projects.js';
 
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
