@@ -1,0 +1,348 @@
+openapi: 3.1.0
+info:
+  title: FILKOM Site API
+  version: 1.0.0
+  description: >
+    API publik & admin untuk members, news, journals, collaborations, dan upload berkas.
+    Seluruh endpoint JSON kecuali upload (multipart/form-data).
+servers:
+  - url: https://labsc.ub.ac.id
+  - url: http://localhost:3000
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean } } }
+
+  # ---------- MEMBERS (public + CRUD by slug) ----------
+  /api/members:
+    get:
+      summary: List members (pencarian & filter)
+      parameters:
+        - in: query; name: q; schema: { type: string }
+        - in: query; name: position; schema: { type: string }
+        - in: query; name: faculty; schema: { type: string }
+        - in: query; name: program; schema: { type: string }
+        - in: query; name: page; schema: { type: integer, minimum: 1, default: 1 }
+        - in: query; name: perPage; schema: { type: integer, default: 6 }
+      responses:
+        '200':
+          description: Daftar member terpaginasikan
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { type: object } }
+                  count: { type: integer }
+                  page: { type: integer }
+                  perPage: { type: integer }
+    post:
+      summary: Create member
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slug, name]
+              properties:
+                slug: { type: string }
+                name: { type: string }
+                title: { type: string }
+                position: { type: string }
+                faculty: { type: string }
+                program: { type: string }
+                email: { type: string }
+                avatar_url: { type: string }
+                bio: { type: string }
+                specialists: { type: array, items: { type: string } }
+                skills: { type: array, items: { type: string } }
+                experiences:
+                  type: array
+                  items:
+                    type: object
+                    properties: { role: {type:string}, org:{type:string}, period:{type:string}, bullets:{type:array, items:{type:string}} }
+                educations:
+                  type: array
+                  items: { type: object, properties: { degree:{type:string}, org:{type:string}, year:{type:integer}, note:{type:string} } }
+                certifications: { type: array, items: { type: string } }
+                socials:
+                  type: array
+                  items: { type: object, properties: { type:{type:string}, url:{type:string} } }
+      responses:
+        '201': { description: Created }
+  /api/members/{slug}:
+    get:
+      summary: Detail member by slug (beserta relasi)
+      parameters: [ { in: path, name: slug, required: true, schema: { type: string } } ]
+      responses:
+        '200': { description: OK }
+        '404': { description: Not found }
+    patch:
+      summary: Update member by slug (replace relasi jika field array dikirim)
+      parameters: [ { in: path, name: slug, required: true, schema: { type: string } } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses:
+        '200': { description: Updated }
+        '404': { description: Not found }
+    delete:
+      summary: Delete member by slug
+      parameters: [ { in: path, name: slug, required: true, schema: { type: string } } ]
+      responses:
+        '200': { description: Deleted }
+        '404': { description: Not found }
+
+  # ---------- NEWS (public) ----------
+  /api/news:
+    get:
+      summary: List news (search & category)
+      parameters:
+        - in: query; name: page; schema: { type: integer, minimum: 1, default: 1 }
+        - in: query; name: perPage; schema: { type: integer, minimum: 1, maximum: 24, default: 6 }
+        - in: query; name: q; schema: { type: string }
+        - in: query; name: category; schema: { type: string }
+      responses:
+        '200': { description: OK }
+  /api/news/{slug}:
+    get:
+      summary: Detail news by slug
+      parameters: [ { in: path, name: slug, required: true, schema: { type: string } } ]
+      responses:
+        '200': { description: OK }
+        '404': { description: Not found }
+
+  # ---------- NEWS (admin CRUD) ----------
+  /api/admin/news:
+    post:
+      summary: Create news (slug otomatis dari title)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, content]
+              properties:
+                title: { type: string }
+                excerpt: { type: string }
+                content: { type: string }
+                category: { type: string, default: Berita }
+                image_url: { type: string }
+                published_at: { type: string, format: date-time }
+      responses:
+        '200': { description: Created }
+  /api/admin/news/{slug}:
+    patch:
+      summary: Update news
+      parameters: [ { in: path, name: slug, required: true, schema: { type: string } } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses:
+        '200': { description: Updated }
+        '404': { description: Not found }
+    delete:
+      summary: Delete news
+      parameters: [ { in: path, name: slug, required: true, schema: { type: string } } ]
+      responses:
+        '200': { description: Deleted }
+        '404': { description: Not found }
+
+  # ---------- JOURNALS (public) ----------
+  /api/journals:
+    get:
+      summary: List journals (search, year, type)
+      parameters:
+        - in: query; name: page; schema: { type: integer, default: 1 }
+        - in: query; name: perPage; schema: { type: integer, default: 9, minimum: 1, maximum: 50 }
+        - in: query; name: q; schema: { type: string }
+        - in: query; name: year; schema: { type: integer }
+        - in: query; name: type; schema: { type: string }
+      responses:
+        '200': { description: OK }
+  /api/journals/{slug}:
+    get:
+      summary: Detail journal by slug
+      parameters: [ { in: path, name: slug, required: true, schema: { type: string } } ]
+      responses:
+        '200': { description: OK }
+        '404': { description: Not found }
+
+  # ---------- JOURNALS (admin CRUD) ----------
+  /api/admin/journals:
+    post:
+      summary: Create journal (slug dari title-year)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string }
+                authors: { type: array, items: { type: string } }
+                venue: { type: string }
+                year: { type: integer }
+                type: { type: string, default: Journal }
+                doi: { type: string }
+                pdf_url: { type: string }
+                thumb_url: { type: string }
+                abstract: { type: string }
+                keywords: { type: array, items: { type: string } }
+      responses:
+        '200': { description: Created }
+  /api/admin/journals/{slug}:
+    patch:
+      summary: Update journal by slug
+      parameters: [ { in: path, name: slug, required: true, schema: { type: string } } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses:
+        '200': { description: Updated }
+        '404': { description: Not found }
+    delete:
+      summary: Delete journal by slug
+      parameters: [ { in: path, name: slug, required: true, schema: { type: string } } ]
+      responses:
+        '200': { description: Deleted }
+        '404': { description: Not found }
+
+  # ---------- COLLABORATIONS ----------
+  /api/collaborations:
+    get:
+      summary: List collaborations (public, terbaru dulu)
+      responses:
+        '200': { description: OK }
+  /api/collaborations/admin:
+    get:
+      summary: Admin list collaborations (pagination + q)
+      parameters:
+        - in: query; name: page; schema: { type: integer, default: 1 }
+        - in: query; name: perPage; schema: { type: integer, default: 10 }
+        - in: query; name: q; schema: { type: string }
+      responses:
+        '200': { description: OK }
+    post:
+      summary: Create collaboration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                organization: { type: string }
+                type: { type: string, default: other }
+                country: { type: string }
+                logo_url: { type: string }
+                description: { type: string }
+                link: { type: string }
+      responses:
+        '200': { description: Created }
+  /api/collaborations/admin/{id}:
+    get:
+      summary: Get collaboration by id
+      parameters: [ { in: path, name: id, required: true, schema: { type: integer } } ]
+      responses:
+        '200': { description: OK }
+        '404': { description: Not found }
+    put:
+      summary: Update collaboration by id
+      parameters: [ { in: path, name: id, required: true, schema: { type: integer } } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses:
+        '200': { description: Updated }
+        '404': { description: Not found }
+    delete:
+      summary: Delete collaboration by id
+      parameters: [ { in: path, name: id, required: true, schema: { type: integer } } ]
+      responses:
+        '200': { description: Deleted }
+        '404': { description: Not found }
+
+  # ---------- UPLOADS ----------
+  /api/uploads:
+    get:
+      summary: Serve file statis dari folder uploads
+      description: Hanya untuk GET file (static). Path file mengikuti URL yang diberikan saat upload.
+  /api/uploads/avatar:
+    post:
+      summary: Upload avatar member
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                slug: { type: string, description: "digunakan untuk penamaan file" }
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '201':
+          description: Created (mengembalikan path & url)
+  /api/uploads/news:
+    post:
+      summary: Upload gambar untuk news
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '201': { description: Created (url gambar) }
+  /api/uploads/journals/pdf:
+    post:
+      summary: Upload PDF jurnal (max 25MB)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '201': { description: Created (url pdf) }
+  /api/uploads/journals/thumb:
+    post:
+      summary: Upload thumbnail jurnal (max 5MB)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '201': { description: Created (url thumbnail) }
+  /uploads/collab/logo:
+    post:
+      summary: Upload logo kolaborasi (non-/api prefix)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '200': { description: OK (url & filename) }
+
+components:
+  securitySchemes: {}
+  responses:
+    NotFound: { description: Not found }
+    BadRequest: { description: Bad request }

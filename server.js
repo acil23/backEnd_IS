@@ -17,6 +17,7 @@ import uploadsJournalsRouter from './src/routes/uploadsJournals.js';
 import journalsAdminRouter from './src/routes/journalsAdmin.js';
 import collaborationsRouter from './src/routes/collaborations.js';
 import { collabUploadRoute } from './src/routes/uploads.js';
+import projectsRouter from './src/routes/projects.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -45,6 +46,7 @@ app.use('/api/admin/news', newsAdminRouter);
 app.use('/api/journals', journalsRouter);
 app.use('/api/admin/journals', journalsAdminRouter);
 app.use('/api/collaborations', collaborationsRouter);
+app.use('/api', projectsRouter);
 collabUploadRoute(app); // biarkan kalau memang membutuhkan app instance
 
 // --- health check ---
